@@ -32,6 +32,14 @@ func (p *Program) TokenLiteral() string {
 	}
 }
 
+func (p *Program) String() string {
+	var out bytes.Buffer
+	for _, s := range p.Statements {
+		out.WriteString(s.String())
+	}
+	return out.String()
+}
+
 type LetStatement struct {
 	Token token.Token // the token.LET token
 	Name  *Identifier
@@ -66,13 +74,14 @@ type ExpressionStatement struct {
 func (es *ExpressionStatement) statementNode()       {}
 func (es *ExpressionStatement) TokenLiteral() string { return es.Token.Literal }
 
-func (p *Program) String() string {
-	var out bytes.Buffer
-	for _, s := range p.Statements {
-		out.WriteString(s.String())
-	}
-	return out.String()
+type IntegerLiteral struct {
+	Token token.Token
+	Value int64
 }
+
+func (il *IntegerLiteral) expressionNode()      {}
+func (il *IntegerLiteral) TokenLiteral() string { return il.Token.Literal }
+func (il *IntegerLiteral) String() string       { return il.Token.Literal }
 
 func (ls *LetStatement) String() string {
 	var out bytes.Buffer
