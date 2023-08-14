@@ -12,53 +12,76 @@ var (
 	FALSE = &object.Boolean{Value: false}
 )
 
-func Eval(node ast.Node) object.Object {
+func Eval(node ast.Node, env *object.Environment) object.Object {
 	switch node := node.(type) {
+
 	// Statements
 	case *ast.Program:
-		return evalProgram(node)
+		return evalProgram(node, env)
+
+	case *ast.BlockStatement:
+		return evalBlockStatement(node, env)
+
 	case *ast.ExpressionStatement:
-		return Eval(node.Expression)
+		return Eval(node.Expression, env)
+
+	case *ast.ReturnStatement:
+		val := Eval(node.ReturnValue, env)
+		if isError(val) {
+			return val
+		}
+		return &object.ReturnValue{Value: val}
+
+	case *ast.LetStatement:
+		val := Eval(node.Value, env)
+		if isError(val) {
+			return val
+		}
+		env.Set(node.Name.Value, val)
+
 	// Expressions
 	case *ast.IntegerLiteral:
 		return &object.Integer{Value: node.Value}
+
 	case *ast.Boolean:
 		return nativeBoolToBooleanObject(node.Value)
+
 	case *ast.PrefixExpression:
-		right := Eval(node.Right)
+		right := Eval(node.Right, env)
 		if isError(right) {
 			return right
 		}
 		return evalPrefixExpression(node.Operator, right)
+
 	case *ast.InfixExpression:
-		left := Eval(node.Left)
+		left := Eval(node.Left, env)
 		if isError(left) {
 			return left
 		}
-		right := Eval(node.Right)
+
+		right := Eval(node.Right, env)
 		if isError(right) {
 			return right
 		}
-		return evalInfixExpression(node.Operator, left, right)
-	case *ast.BlockStatement:
-		return evalBlockStatement(node)
-	case *ast.IfExpression:
-		return evalIfExpression(node)
-	case *ast.ReturnStatement:
-		val := Eval(node.ReturnValue)
-		if isError(val) {
-			return val
-		}
 
-		return &object.ReturnValue{Value: val}
+		return evalInfixExpression(node.Operator, left, right)
+
+	case *ast.IfExpression:
+		return evalIfExpression(node, env)
+
+	case *ast.Identifier:
+		return evalIdentifier(node, env)
 	}
+
 	return nil
 }
 
-func evalProgram(program *ast.Program) object.Object {
+func evalProgram(program *ast.Program, env *object.Environment) object.Object {
 	var result object.Object
+
 	for _, statement := range program.Statements {
-		result = Eval(statement)
+		result = Eval(statement, env)
+
 		switch result := result.(type) {
 		case *object.ReturnValue:
 			return result.Value
@@ -66,13 +89,16 @@ func evalProgram(program *ast.Program) object.Object {
 			return result
 		}
 	}
+
 	return result
 }
 
-func evalBlockStatement(block *ast.BlockStatement) object.Object {
+func evalBlockStatement(block *ast.BlockStatement, env *object.Environment) object.Object {
 	var result object.Object
+
 	for _, statement := range block.Statements {
-		result = Eval(statement)
+		result = Eval(statement, env)
+
 		if result != nil {
 			rt := result.Type()
 			if rt == object.RETURN_VALUE_OBJ || rt == object.ERROR_OBJ {
@@ -80,7 +106,15 @@ func evalBlockStatement(block *ast.BlockStatement) object.Object {
 			}
 		}
 	}
+
 	return result
+}
+
+func nativeBoolToBooleanObject(input bool) *object.Boolean {
+	if input {
+		return TRUE
+	}
+	return FALSE
 }
 
 func evalPrefixExpression(operator string, right object.Object) object.Object {
@@ -111,23 +145,32 @@ func evalInfixExpression(operator string, left, right object.Object) object.Obje
 	}
 }
 
-func evalIfExpression(ie *ast.IfExpression) object.Object {
-	condition := Eval(ie.Condition)
-	if isError(condition) {
-		return condition
+func evalBangOperatorExpression(right object.Object) object.Object {
+	switch right {
+	case TRUE:
+		return FALSE
+	case FALSE:
+		return TRUE
+	case NULL:
+		return TRUE
+	default:
+		return FALSE
 	}
-	if isTruthy(condition) {
-		return Eval(ie.Consequence)
-	} else if ie.Alternative != nil {
-		return Eval(ie.Alternative)
-	} else {
-		return NULL
+}
+
+func evalMinusPrefixOperatorExpression(right object.Object) object.Object {
+	if right.Type() != object.INTEGER_OBJ {
+		return newError("unknown operator: -%s", right.Type())
 	}
+
+	value := right.(*object.Integer).Value
+	return &object.Integer{Value: -value}
 }
 
 func evalIntegerInfixExpression(operator string, left, right object.Object) object.Object {
 	leftVal := left.(*object.Integer).Value
 	rightVal := right.(*object.Integer).Value
+
 	switch operator {
 	case "+":
 		return &object.Integer{Value: leftVal + rightVal}
@@ -151,33 +194,28 @@ func evalIntegerInfixExpression(operator string, left, right object.Object) obje
 	}
 }
 
-func evalBangOperatorExpression(right object.Object) object.Object {
-	switch right {
-	case TRUE:
-		return FALSE
-	case FALSE:
-		return TRUE
-	case NULL:
-		return TRUE
-	default:
-		return FALSE
+func evalIfExpression(ie *ast.IfExpression, env *object.Environment) object.Object {
+	condition := Eval(ie.Condition, env)
+	if isError(condition) {
+		return condition
+	}
+
+	if isTruthy(condition) {
+		return Eval(ie.Consequence, env)
+	} else if ie.Alternative != nil {
+		return Eval(ie.Alternative, env)
+	} else {
+		return NULL
 	}
 }
 
-func evalMinusPrefixOperatorExpression(right object.Object) object.Object {
-	if right.Type() != object.INTEGER_OBJ {
-		return newError("unknown operator: -%s", right.Type())
+func evalIdentifier(node *ast.Identifier, env *object.Environment) object.Object {
+	val, ok := env.Get(node.Value)
+	if !ok {
+		return newError("identifier not found: " + node.Value)
 	}
 
-	value := right.(*object.Integer).Value
-	return &object.Integer{Value: -value}
-}
-
-func nativeBoolToBooleanObject(input bool) *object.Boolean {
-	if input {
-		return TRUE
-	}
-	return FALSE
+	return val
 }
 
 func isTruthy(obj object.Object) bool {
@@ -202,4 +240,26 @@ func isError(obj object.Object) bool {
 		return obj.Type() == object.ERROR_OBJ
 	}
 	return false
+}
+
+func evalExpressions(exps []ast.Expression, env *object.Environment) []object.Object {
+	var result []object.Object
+
+	for _, e := range exps {
+		evaluated := Eval(e, env)
+		if isError(evaluated) {
+			return []object.Object{evaluated}
+		}
+		result = append(result, evaluated)
+	}
+
+	return result
+}
+
+func unwrapReturnValue(obj object.Object) object.Object {
+	if returnValue, ok := obj.(*object.ReturnValue); ok {
+		return returnValue.Value
+	}
+
+	return obj
 }
